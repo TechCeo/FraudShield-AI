@@ -1,3 +1,3 @@
-# Application
+# Application Runtime Boundary
 
-The interactive application is intentionally deferred until Milestone 6.
+This directory defines the application-runtime boundary. The executable repository does not expose an interactive application.

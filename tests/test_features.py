@@ -1,4 +1,4 @@
-"""Behavioral tests for leakage-safe Milestone 1 features."""
+"""Behavioral tests for leakage-safe transaction features."""
 
 from __future__ import annotations
 

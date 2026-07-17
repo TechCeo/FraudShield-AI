@@ -1,1 +1,1 @@
-"""Shared evaluation and logging utilities extended in later milestones."""
+"""Shared utility namespace for Fraud Shield components."""

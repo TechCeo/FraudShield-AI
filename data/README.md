@@ -14,7 +14,7 @@
 | Target | `is_fraud` |
 | External source reference and license | Not recorded in the repository; redistribution requires authoritative provenance and license review |
 
-This contract defines the immutable raw transaction inputs consumed by `src/features.py` and `src/eda.py`. It specifies file identity, column order, logical types, validation constraints, temporal alignment, holdout isolation, and handling requirements.
+This contract defines the immutable raw transaction inputs consumed by `src/features.py`, `src/eda.py`, and `src/preprocessing.py`. It specifies file identity, column order, logical types, validation constraints, temporal alignment, fitting boundaries, holdout isolation, and handling requirements.
 
 ## Dataset Fingerprints
 
@@ -33,6 +33,17 @@ Any change to file size, row count, column order, or SHA-256 digest represents a
 | `fraudTest.csv` | 553,574 | 2,145 | 0.385986% | `2020-06-21 12:14:25` through `2020-12-31 23:59:34` | `1371816865` through `1388534374` |
 
 The aggregate holdout label counts were inspected for contract-integrity validation only. Neither row-level holdout records nor aggregate holdout outcomes may influence exploratory analysis, fitting, encoder estimation, resampling, hyperparameter selection, probability calibration, or threshold selection.
+
+### Default development partition
+
+`SplitConfig(validation_fraction=0.20)` assigns the leading development prefix to fitting and the final development suffix to validation. The effective boundary moves to the first row of its `unix_time` bucket so no same-second events are divided across partitions.
+
+| Partition | Development row positions | Rows | Legitimate (`0`) | Fraud (`1`) | Fraud rate | Display-time boundary | `unix_time` boundary |
+|---|---:|---:|---:|---:|---:|---|---|
+| Training | `0` through `1,037,339` | 1,037,340 | 1,031,372 | 5,968 | 0.575318% | `2019-01-01 00:00:18` through `2020-03-06 07:15:17` | `1325376018` through `1362554117` |
+| Validation | `1,037,340` through `1,296,674` | 259,335 | 257,797 | 1,538 | 0.593055% | `2020-03-06 07:16:43` through `2020-06-21 12:13:37` | `1362554203` through `1371816817` |
+
+The requested and effective boundary position is `1,037,340`; validation begins at `unix_time=1362554203`. `data/processed/split_manifest.json` binds these values to the raw SHA-256 fingerprints and records the complete partition schemas and target summaries. Any configuration or input-fingerprint change defines a different partition contract.
 
 ## Immutable Schema, Shapes, and Boundaries
 
@@ -143,17 +154,21 @@ The prevalence difference is recorded as contract and monitoring context only; i
 
 1. **Causal clock:** `unix_time` defines event ordering and all 1-hour, 6-hour, and 24-hour elapsed-time windows. Every window uses `[t - window, t)`: the lower cutoff is included, while the active timestamp and same-second peers are excluded.
 2. **Partition alignment:** `fraudTest.csv` begins 48 seconds after `fraudTrain.csv` ends. The files form one chronological transaction stream rather than independent random samples.
-3. **Forward-only state:** Feature state from the end of the development stream must initialize holdout transformation so the 908 continuing cards retain valid prior windows and lifetime totals. Holdout events and labels never alter features for earlier rows.
-4. **Holdout isolation:** Except for aggregate contract-integrity validation, `fraudTest.csv` is excluded from EDA, preprocessing fit operations, resampling, model fitting, model selection, calibration, and threshold tuning. It is consumed only by finalized forward transformations and evaluation procedures.
-5. **Cold starts:** A card absent from the incoming serialized state receives zero rolling and all-prior values until earlier events for that card exist in the active stream.
-6. **Timestamp ties:** Transactions sharing `(cc_num, unix_time)` cannot observe one another. Their aggregate becomes visible only at a strictly later timestamp.
-7. **Readable timestamp artifact:** Between source indices `100531` and `100532`, the development display timestamp moves from `2019-02-28 23:59:40` to `2019-02-28 00:02:34` while `unix_time` increases from `1330473580` to `1330473754`. Calendar plots may use `trans_date_trans_time`; causal calculations do not.
-8. **Calendar offset artifact:** Decoding `unix_time` nominally produces the same month, day, and time seven calendar years earlier than `trans_date_trans_time`; source events on `2012-02-29` are remapped to display date `2019-02-28`. The fields are two representations of one event clock and must not be treated as independent predictive signals.
+3. **Internal fitting boundary:** Training ends at development row `1,037,339`; validation begins at row `1,037,340`. Imputation values, clipping bounds, scaling statistics, category vocabularies, and frequency maps are fitted exclusively on the training prefix.
+4. **Forward-only state:** Feature state from the end of the development stream must initialize holdout transformation so the 908 continuing cards retain valid prior windows and lifetime totals. Holdout events and labels never alter features for earlier rows.
+5. **Holdout isolation:** Except for aggregate contract-integrity validation, `fraudTest.csv` is excluded from EDA, preprocessing fit operations, resampling, model fitting, model selection, calibration, and threshold tuning. It is consumed only by finalized forward transformations and evaluation procedures.
+6. **Sampling isolation:** Class weighting, random under-sampling, and SMOTENC use training labels only. Validation and holdout rows retain their source prevalence and order.
+7. **Row identity:** `trans_num` must remain unique and in source order. The split manifest stores an ordered-key digest for every partition, and manifest-bound preprocessing rejects reordered, duplicated, or substituted training rows.
+8. **Cold starts:** A card absent from the incoming serialized state receives zero rolling and all-prior values until earlier events for that card exist in the active stream.
+9. **Timestamp ties:** Transactions sharing `(cc_num, unix_time)` cannot observe one another. Their aggregate becomes visible only at a strictly later timestamp.
+10. **Readable timestamp artifact:** Between source indices `100531` and `100532`, the development display timestamp moves from `2019-02-28 23:59:40` to `2019-02-28 00:02:34` while `unix_time` increases from `1330473580` to `1330473754`. Calendar plots may use `trans_date_trans_time`; causal calculations do not.
+11. **Calendar offset artifact:** Decoding `unix_time` nominally produces the same month, day, and time seven calendar years earlier than `trans_date_trans_time`; source events on `2012-02-29` are remapped to display date `2019-02-28`. The fields are two representations of one event clock and must not be treated as independent predictive signals.
 
 ## Storage and Handling Rules
 
 - Raw CSV files are immutable source assets and remain directly under `data/`.
 - Generated feature streams and serialized velocity state are written under `data/processed/`.
+- Split manifests, preprocessing artifacts, and imbalance-strategy reports are written under `data/processed/` and verified by embedded payload digests.
 - The feature CLI retains raw source columns except `Unnamed: 0` by default. Generated feature streams therefore remain privacy-sensitive and require the same access controls as the raw files.
 - Names, addresses, full card identifiers, dates of birth, and transaction identifiers are excluded from notebook displays and deterministic analytical samples.
 - Raw and generated transaction files are excluded from version control by `.gitignore`.

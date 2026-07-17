@@ -2,16 +2,19 @@
 
 ## Project Overview
 
-Fraud Shield AI is a leakage-aware transaction feature platform for payment-fraud risk scoring. It converts chronologically ordered card transactions into deterministic geospatial, velocity, and cumulative behavioral signals that provide inputs for subsequent preprocessing, model fitting, and low-latency online scoring.
+Fraud Shield AI is a leakage-aware transaction data platform for payment-fraud risk scoring. It converts chronologically ordered card transactions into deterministic behavioral features, defines immutable temporal partitions, learns preprocessing state from training rows only, and emits sparse model-ready matrices under explicit imbalance controls.
 
 The executable codebase provides:
 
 - chunked CSV ingestion and transformation;
 - causal per-card feature computation with portable state;
+- fingerprinted chronological train, validation, and out-of-time holdout boundaries;
+- train-fitted missing-value imputation, outlier clipping, scaling, frequency encoding, and sparse one-hot encoding;
+- mutually exclusive class weighting, random under-sampling, and mixed-data SMOTENC controls restricted to training rows;
 - deterministic exploratory profiling and visualization;
-- validation of time ordering, coordinates, currency precision, timestamp ties, state continuity, and label independence.
+- validation of time ordering, coordinates, currency precision, timestamp ties, state continuity, label independence, artifact integrity, and fitting scope.
 
-The repository does not contain a fitted estimator, decision threshold, scoring endpoint, or application runtime. Its operational output is a feature-enriched transaction stream plus the state required to continue causal computation across sequential data partitions.
+The repository does not contain a fitted fraud estimator, decision threshold, scoring endpoint, or application runtime. Its operational outputs are feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, and sparse `float32` training matrices produced through the Python API.
 
 ### Design and performance objectives
 
@@ -19,9 +22,10 @@ The repository does not contain a fitted estimator, decision threshold, scoring 
 |---|---|
 | Fraud detection quality | Produces behavioral signals intended for recall-, precision-, and PR-AUC-oriented classifiers rather than accuracy-only evaluation. |
 | Leakage prevention | Excludes the active transaction and all same-card transactions sharing its timestamp from prior-behavior features. |
-| Determinism | Uses explicit window boundaries, integer-cent accumulation, stable timestamp handling, and versioned JSON state. |
-| Scalability | Reads CSV input in configurable chunks; state memory scales with unique cards and timestamp buckets retained inside configured windows rather than total source rows. |
+| Determinism | Uses explicit window boundaries, integer-cent accumulation, stable timestamp handling, ordered transaction-key fingerprints, fixed random seeds, and digest-protected JSON artifacts. |
+| Scalability | Reads CSV input in configurable chunks; feature state scales with retained card histories, while `fit_csv` stores numeric fitting values in a temporary disk-backed matrix and keeps only categorical aggregates in memory. |
 | Stream continuity | Carries per-card state across sequential files so known cards do not receive artificial empty histories at partition boundaries. |
+| Evaluation integrity | Fits transformation statistics and applies sampling only to the chronological training partition; validation and holdout prevalence remain unchanged. |
 | Data integrity | Rejects missing card identifiers, invalid timestamps, non-finite amounts, unsupported currency precision, invalid coordinates, and per-card time reversals. |
 | Privacy | EDA samples exclude names, streets, raw card identifiers, birth dates, and transaction identifiers. Feature-enriched CSVs retain source columns and require the same controls as raw data. |
 
@@ -32,50 +36,60 @@ The repository does not contain a fitted estimator, decision threshold, scoring 
 | Path | Responsibility |
 |---|---|
 | `src/features.py` | Geospatial calculations, causal velocity features, state serialization, chunked CSV processing, and the feature-generation CLI. |
+| `src/preprocessing.py` | Chronological split manifests, train-fitted sparse transformation, JSON preprocessing artifacts, imbalance controls, and the preprocessing CLI. |
 | `src/eda.py` | Exact chunked profiling, deterministic sampling, aggregate quality checks, and pre-sampling feature computation. |
 | `notebooks/01_eda.ipynb` | Correlation, imbalance, amount, distance, temporal, and geographic visualizations using outputs from `src/eda.py`. |
 | `scripts/validate_notebook.py` | Headless execution of notebook code cells with optional figure export for verification. |
 | `tests/test_features.py` | Feature-contract tests covering causal boundaries, timestamp ties, state continuation, geography, currency precision, and chunk invariance. |
 | `tests/test_eda.py` | Profiling, sampling, privacy, aggregation, and source-fingerprint tests. |
-| `data/` | Immutable raw CSV inputs and the `processed/` destination for generated feature streams and state files. |
+| `tests/test_preprocessing.py` | Temporal partition, train-only fitting, artifact-integrity, encoding, class-weighting, and resampling tests. |
+| `data/` | Immutable raw CSV inputs and the `processed/` destination for generated feature, state, partition, and preprocessing artifacts. |
 
 ### Data lineage
 
 ```text
-data/fraudTrain.csv or data/fraudTest.csv
-                    |
-                    v
-      Chunked CSV ingestion (default: 100,000 rows)
-      - read cc_num as a string identifier
-      - drop the redundant Unnamed: 0 export index
-      - preserve source columns and row order
-                    |
-                    v
-      add_geospatial_features(...)
-      - validate latitude and longitude ranges
-      - compute cardholder-to-merchant Haversine distance
-                    |
-                    v
-      RollingFeatureState.transform_chunk(...)
-      - use unix_time as the causal clock
-      - aggregate same-card/same-second rows as one pending bucket
-      - compute prior 1-hour, 6-hour, and 24-hour counts and spend
-      - compute all-prior transaction count and spend
-      - reject per-card timestamp reversals
-                    |
-          +---------+---------+
-          |                   |
-          v                   v
-  Atomic CSV/CSV.GZ     JSON/JSON.GZ state
-  feature output        schema_version = 1
-          |                   |
-          +---------+---------+
-                    |
-                    v
-      Sequential partition or scoring consumer
+data/fraudTrain.csv                         data/fraudTest.csv
+        |                                            |
+        +---------- fingerprint and scan ------------+
+        |                                            |
+        |                             chronological_split_manifest
+        |                             - whole unix_time buckets
+        |                             - train/validation row boundaries
+        |                             - isolated out-of-time holdout
+        |                                            |
+        v                                            v
+add_geospatial_features(...)              causal continuation with
+RollingFeatureState.transform_chunk(...)  development velocity state
+        |                                            |
+        v                                            v
+fraudTrain_features.csv.gz                fraudTest_features.csv.gz
+        |                                            |
+        +-- training rows ---------------------------+
+        |       fit FraudPreprocessor once           |
+        |       - median imputation                   |
+        |       - log1p and quantile clipping         |
+        |       - standard scaling                    |
+        |       - frequency and nominal vocabularies  |
+        |                    |                       |
+        |                    v                       |
+        |       fraud_preprocessor.json.gz            |
+        |                    |                       |
+        +-- train ----------+-- validation ----------+-- holdout
+             |                       |                     |
+             v                       v                     v
+       frozen transform       frozen transform      frozen transform
+             |                       |                     |
+             v                       v                     v
+       imbalance control       unchanged class       unchanged class
+       train rows only         prevalence            prevalence
+             |
+             v
+       sparse CSR float32 matrix + labels + control metadata
 ```
 
 `process_csv` does not inspect `is_fraud`; changing or removing the label does not change engineered features. The output retains every source column except the redundant export index by default, then appends the registered feature columns below.
+
+`FraudPreprocessor.fit` and `FraudPreprocessor.fit_csv` require `partition="train"`. Passing `split_manifest=manifest` additionally binds fitting to the registered row count, time range, target counts, ordered transaction keys, and manifest digest. Frozen statistics are reused for validation and holdout transformation; those partitions cannot extend vocabularies, change frequencies, alter clipping bounds, or influence scaling. `prepare_training_batch` accepts only the exact fitted partition and enforces the same training-only scope for class weighting and resampling.
 
 ### Feature-stream generation
 
@@ -101,6 +115,48 @@ python -m src.features `
 ```
 
 Existing output paths are rejected unless `--force` is supplied. Each CSV or state file is written through a temporary file and atomically replaced after successful serialization. Feature output and state output are committed separately.
+
+### Partition and preprocessing controls
+
+Create the digest-protected chronological split manifest from the immutable raw files:
+
+```powershell
+python -m src.preprocessing split `
+  --development data/fraudTrain.csv `
+  --holdout data/fraudTest.csv `
+  --output data/processed/split_manifest.json
+```
+
+The default `validation_fraction=0.20` places the final 20% of development rows in validation without dividing a shared `unix_time` bucket. The holdout must begin strictly after the development stream. File sizes, SHA-256 fingerprints, schemas, boundaries, row counts, class counts, and fraud rates are recorded in the manifest.
+
+Fit and persist preprocessing state from the manifest-defined training prefix of the feature-enriched development stream:
+
+```python
+from src.eda import sha256_file
+from src.preprocessing import FraudPreprocessor, load_split_manifest
+
+manifest = load_split_manifest("data/processed/split_manifest.json")
+feature_path = "data/processed/fraudTrain_features.csv.gz"
+preprocessor = FraudPreprocessor().fit_csv(
+    feature_path,
+    partition="train",
+    split_manifest=manifest,
+    source_sha256=sha256_file(feature_path),
+)
+preprocessor.save("data/processed/fraud_preprocessor.json.gz")
+```
+
+Create the deterministic train-only imbalance comparison artifact:
+
+```powershell
+python -m src.preprocessing imbalance-report `
+  --split-manifest data/processed/split_manifest.json `
+  --output data/processed/imbalance_strategy_report.json `
+  --sampling-strategy 0.10 `
+  --random-state 42
+```
+
+Output paths are write-once by default. Pass `--force` only when deliberate replacement of a reproducible artifact is required.
 
 ## Feature Schema Registry
 
@@ -148,6 +204,46 @@ For a transaction belonging to card `c` at time `t`, every rolling interval is l
 | Label independence | `is_fraud` is neither required nor read by feature calculations. |
 
 Custom positive whole-second windows are supported. Output suffixes use `Nh` for whole hours, `Nm` for whole minutes, and `Ns` otherwise.
+
+## Preprocessing Schema Registry
+
+`FraudPreprocessor` emits a SciPy CSR matrix with `float32` values. Feature order is stored in the preprocessing artifact and protected by `feature_schema_sha256`. Direct identifiers and source fields not listed below, including `cc_num`, `trans_num`, names, street address, raw date of birth, raw timestamps, and `is_fraud`, are not emitted into the matrix.
+
+| Input group | Registered fields | Transformation and output contract |
+|---|---|---|
+| Numeric transaction and behavior | `amt`, `city_pop`, distance, 1/6/24-hour counts and spend, all-prior count and spend | Median imputation, `log1p`, training-quantile clipping at 0.5% and 99.5%, then training-mean standardization. One `num__log1p_*` column per field. |
+| Derived numeric | `age_years` | Transaction date minus date of birth in mean solar years; median imputation, quantile clipping, and standardization. |
+| Derived cyclical | hour of day, day of week, month of year | Sine/cosine pairs named `num__hour_*`, `num__day_*`, and `num__month_*`; quantile clipping and standardization use training statistics. |
+| Low-cardinality nominal | `category`, `state` | Sparse one-hot columns with explicit `__MISSING__` and `__UNKNOWN__` levels. Vocabulary is fixed by training rows. |
+| High-cardinality categorical | `merchant`, `city`, `job`, `zip` | Training relative frequency plus an unknown-level indicator per input: `freq__<field>` and `freq__<field>__unknown`. |
+
+### Fitting and transformation invariants
+
+| Mechanism | Contract |
+|---|---|
+| Fitting scope | `fit` and `fit_csv` accept only `partition="train"`. Validation and holdout rows cannot contribute preprocessing statistics. |
+| Manifest binding | Supplying `split_manifest` derives the training boundary and verifies row count, time endpoints, label counts, ordered transaction-key digest, and manifest digest. `fit_csv` also recomputes the feature CSV SHA-256 fingerprint. |
+| Missing values | Numeric medians and categorical missing tokens are learned or registered without using the target. Malformed non-null values remain validation errors. |
+| Outliers | Quantile bounds are learned after optional `log1p` transformation and are frozen for every later partition. |
+| Unknown categories | Unseen nominal values map to the registered `__UNKNOWN__` one-hot level; unseen high-cardinality values receive frequency `0.0` and unknown indicator `1.0`. |
+| Output schema | Numeric fields precede frequency fields, followed by nominal one-hot fields. The ordered names and schema digest are serialized with the artifact. |
+| Artifact format | JSON or gzip-compressed JSON, `schema_version = 1`, with content digest, configuration, numeric statistics, vocabularies, frequency mappings, fitted context, and dependency versions. Pickle deserialization is not used. |
+| Immutability | Calling `transform`, `prepare_sampler_frame`, or `transform_sampler_frame` does not change fitted statistics or vocabularies. |
+
+### Imbalance controls
+
+Exactly one `ImbalanceConfig.strategy` is applied to a training batch. Validation and holdout rows are transformed without class rebalancing.
+
+| Strategy | Training behavior | Default output ratio |
+|---|---|---|
+| `none` | Preserves source rows and labels. | Observed training prevalence. |
+| `class_weight` | Preserves rows and supplies balanced per-row weights computed from training labels. | Observed training prevalence. |
+| `random_under` | Deterministically reduces majority rows with `RandomUnderSampler`; selected row positions are SHA-256 fingerprinted in metadata. | Minority/majority = `0.10`. |
+| `smotenc` | Applies SMOTENC to scaled continuous and frequency fields plus unencoded low-cardinality fields, then performs sparse one-hot encoding. | Minority/majority = `0.10`. |
+
+SMOTENC rejects a minority class with no more rows than `k_neighbors`. Default guards reject projections above 2,000,000 rows or 2,000,000,000 conservatively estimated dense working bytes. Every `TrainingBatch` records class counts before and after handling, random seed, ordered input and selection fingerprints, sampler class, dependency versions, schema digest, and the assertion that validation and holdout were not sampled.
+
+`TrainingBatch` is a fixed-partition final-fit interface. It must not be supplied to cross-validation search because its preprocessing state and sampling decision already reflect the complete fitting partition. Cross-validation consumers must fit transformations and apply resampling independently inside each training fold while leaving each fold's validation rows untouched.
 
 ## Environment Setup & Verification
 
@@ -198,6 +294,12 @@ Run the feature-contract suite:
 python -m pytest tests/test_features.py -q --basetemp .pytest_tmp_features
 ```
 
+Run the preprocessing-contract suite:
+
+```powershell
+python -m pytest tests/test_preprocessing.py -q --basetemp .pytest_tmp_preprocessing
+```
+
 Run all automated tests:
 
 ```powershell
@@ -216,4 +318,10 @@ Confirm the feature CLI surface without writing output files:
 python -m src.features --help
 ```
 
-A successful verification command exits with status code `0`. Test failures, schema violations, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.
+Confirm the preprocessing CLI surface without writing output files:
+
+```powershell
+python -m src.preprocessing --help
+```
+
+A successful verification command exits with status code `0`. Test failures, schema violations, artifact-digest mismatches, invalid fitting scope, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.
