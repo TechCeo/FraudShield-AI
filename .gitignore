@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp*/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.matplotlib_cache/
+.notebook_qa/
+.venv/
+venv/
+
+# Local outputs and logs
+data/processed/*
+!data/processed/README.md
+logs/
+artifacts/
+
+# Large source datasets are obtained separately.
+data/*.csv
+data/*.csv.gz
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
