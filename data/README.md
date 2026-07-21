@@ -168,7 +168,7 @@ The prevalence difference is recorded as contract and monitoring context only; i
 
 - Raw CSV files are immutable source assets and remain directly under `data/`.
 - Generated feature streams and serialized velocity state are written under `data/processed/`.
-- Split manifests, preprocessing artifacts, and imbalance-strategy reports are written under `data/processed/` and verified by embedded payload digests.
+- Split manifests, preprocessing artifacts, imbalance-strategy reports, and sparse model-data registries are written under `data/processed/` and verified by embedded payload or file digests.
 - The feature CLI retains raw source columns except `Unnamed: 0` by default. Generated feature streams therefore remain privacy-sensitive and require the same access controls as the raw files.
 - Names, addresses, full card identifiers, dates of birth, and transaction identifiers are excluded from notebook displays and deterministic analytical samples.
 - Raw and generated transaction files are excluded from version control by `.gitignore`.

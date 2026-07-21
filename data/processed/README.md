@@ -1,6 +1,6 @@
 # Processed Artifact Contract
 
-This directory is the controlled destination for reproducible feature, state, partition, and preprocessing artifacts. Generated files are excluded from version control and inherit the restricted data classification of the raw transaction sources unless their schema explicitly contains metadata only.
+This directory is the controlled destination for reproducible feature, state, partition, preprocessing, and sparse model-data artifacts. Generated files are excluded from version control and inherit the restricted data classification of the raw transaction sources unless their schema explicitly contains metadata only.
 
 ## Artifact Registry
 
@@ -13,8 +13,14 @@ This directory is the controlled destination for reproducible feature, state, pa
 | `test_velocity_state.json.gz` | `python -m src.features` | Gzip-compressed JSON; `RollingFeatureState`, schema version 1 | Terminal state after the holdout stream. |
 | `fraud_preprocessor.json.gz` | `FraudPreprocessor.save` | Gzip-compressed JSON; `fraud_preprocessor`, schema version 1 | Digest-protected transformation configuration, numeric statistics, category vocabularies, frequency mappings, ordered feature names, schema fingerprint, dependency versions, and training-fit context. |
 | `imbalance_strategy_report.json` | `python -m src.preprocessing imbalance-report` | JSON; `imbalance_strategy_report`, schema version 1 | Deterministic projections for unchanged data, class weighting, random under-sampling, and SMOTENC using training class counts only. |
+| `model_data/fraud_preprocessor.json.gz` | `python -m src.models.train prepare-data` | Gzip-compressed JSON; `fraud_preprocessor`, schema version 1 | Preprocessing state fitted exclusively on the registered training prefix and bound to the feature-stream and split fingerprints. |
+| `model_data/train_features.npz` | `python -m src.models.train prepare-data` | SciPy CSR NPZ; `float32`, 1,037,340 x 95 | Sparse classifier input for the chronological training partition. |
+| `model_data/validation_features.npz` | `python -m src.models.train prepare-data` | SciPy CSR NPZ; `float32`, 259,335 x 95 | Sparse classifier input transformed with frozen training state. |
+| `model_data/holdout_features.npz` | `python -m src.models.train prepare-data` | SciPy CSR NPZ; `float32`, 555,719 x 95 | Sparse out-of-time classifier input transformed with frozen training state. |
+| `model_data/*_target.npy` | `python -m src.models.train prepare-data` | NumPy NPY; `int8` | Binary labels aligned one-to-one with each registered sparse matrix. Pickle loading is disabled. |
+| `model_data/model_data_manifest.json` | `python -m src.models.train prepare-data` | JSON; `fraud_model_data`, schema version 1 | Digest-protected registry of matrix shapes, nonzero counts, file fingerprints, labels, ordered feature names, preprocessing identity, feature-stream fingerprints, and split identity. |
 
-Sparse `TrainingBatch.X` matrices are generated in memory by `prepare_training_batch`. The preprocessing module does not serialize model matrices or labels; downstream consumers own any persisted matrix format and must retain the accompanying `TrainingBatch.metadata` and preprocessing schema digest.
+`prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators and evaluation reports are stored under `artifacts/models/`, outside this directory.
 
 ## Data Lineage and Dependency Rules
 
@@ -36,6 +42,12 @@ immutable raw files
                                            |
                                            +-- frozen transform --> holdout matrix
 
+train/validation/holdout matrices --> model_data/model_data_manifest.json
+            |
+            +-- training fit + validation selection --> artifacts/models/*
+                                                        |
+                                                        +-- frozen threshold holdout scoring
+
 split_manifest.json -- training counts --> imbalance_strategy_report.json
 training matrix + training labels --------> one TrainingBatch imbalance control
 ```
@@ -49,6 +61,8 @@ The following controls are mandatory:
 - Random under-sampling and SMOTENC operate only through `prepare_training_batch(..., partition="train")`.
 - Holdout feature generation loads `train_velocity_state.json.gz`; starting the holdout with empty state violates the causal continuity contract.
 - JSON artifacts must pass their embedded payload digest and schema-version checks before use.
+- Sparse matrix and target fingerprints must match `model_data_manifest.json` before classifier fitting.
+- Model reports must match both their embedded payload digest and estimator SHA-256 digest before evaluation consolidation.
 
 ## Canonical Commands
 
@@ -92,6 +106,21 @@ python -m src.preprocessing imbalance-report `
   --random-state 42
 ```
 
+Generate or verify feature streams and persist the sparse classifier partitions:
+
+```powershell
+python -m src.models.train prepare-data
+```
+
+Optimize the registered classifiers and persist their evaluation reports:
+
+```powershell
+python -m src.models.train fit --model logistic_regression
+python -m src.models.train fit --model random_forest
+python -m src.models.train fit --model xgboost
+python -m src.models.train summarize
+```
+
 CLI outputs are write-once unless `--force` is supplied. JSON and feature outputs are written through temporary paths and atomically moved into place after successful serialization.
 
 ## Retention and Access Controls
@@ -99,5 +128,8 @@ CLI outputs are write-once unless `--force` is supplied. JSON and feature output
 - Feature CSVs retain sensitive account identifiers, personal attributes, transaction identifiers, and precise locations. Apply the same access controls as the raw CSVs.
 - Velocity-state files contain card identifiers and behavioral aggregates and therefore remain restricted.
 - The preprocessing artifact contains learned aggregate statistics and category values. Treat it as internal model data and prevent unreviewed publication.
+- Sparse model-data matrices and targets retain row-level behavioral and label information and remain restricted.
+- Joblib estimator artifacts are trusted-internal files and must never be loaded from an unverified source; use the report fingerprint before deserialization.
+- Native XGBoost JSON is the registered portable format for the boosted classifier.
 - The split and imbalance manifests contain file-system paths, fingerprints, time bounds, and label aggregates. They do not contain row-level transactions but remain internal operational metadata.
 - Delete or replace generated artifacts only after confirming that dependent matrices, reports, or model artifacts are no longer in use. Recompute downstream consumers whenever an upstream fingerprint or schema digest changes.
