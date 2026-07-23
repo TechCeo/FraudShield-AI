@@ -26,6 +26,45 @@ The executable codebase provides:
 
 The repository contains fitted classical, neural, and hybrid estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, drift references, latency measurements, model reports, evaluation matrices, and a local Streamlit scoring interface. The application validates raw manual or uploaded transactions, reproduces causal static and sequential context, explains model evidence, and captures reviewer feedback locally.
 
+### Documentation map
+
+| Manual | Scope |
+|---|---|
+| `README.md` | System architecture, feature and preprocessing schemas, classifier contracts, evaluation, monitoring, application runtime, setup, and verification. |
+| `data/README.md` | Immutable raw dataset identity, schema, constraints, temporal boundaries, provenance status, and handling rules. |
+| `data/processed/README.md` | Generated feature, state, partition, preprocessing, sparse matrix, and sequence artifact contracts. |
+| `artifacts/README.md` | Estimator, report, prediction, drift, latency, application context, feedback, integrity, and retention registry. |
+| `app/README.md` | Streamlit input, causal scoring, explanation, feedback, launch, and local security contracts. |
+
+### Repository layout
+
+```text
+FraudShield/
+|-- data/
+|   |-- fraudTrain.csv
+|   |-- fraudTest.csv
+|   `-- processed/
+|       `-- model_data/
+|-- src/
+|   |-- features.py
+|   |-- preprocessing.py
+|   |-- eda.py
+|   |-- utils.py
+|   `-- models/
+|-- artifacts/
+|   |-- models/
+|   `-- app/
+|-- app/
+|   |-- main.py
+|   |-- scoring.py
+|   `-- feedback.py
+|-- notebooks/
+|-- scripts/
+|-- tests/
+|-- requirements.txt
+`-- .streamlit/config.toml
+```
+
 ### Design and performance objectives
 
 | Objective | System behavior |
@@ -41,6 +80,7 @@ The repository contains fitted classical, neural, and hybrid estimators with val
 | Artifact traceability | Binds every model report to its estimator digest, model-data manifest, feature schema, parameters, dependency versions, and random seed. |
 | Data integrity | Rejects missing card identifiers, invalid timestamps, non-finite amounts, unsupported currency precision, invalid coordinates, and per-card time reversals. |
 | Privacy | EDA samples exclude names, streets, raw card identifiers, birth dates, and transaction identifiers. Feature-enriched CSVs retain source columns and require the same controls as raw data. |
+| Application boundary | Provides a local analytical review interface without authentication, TLS termination, remote authorization, or automatic model updates. Loopback binding is required for local-only operation. |
 
 ## System Architecture & Pipeline Flow
 
@@ -563,10 +603,12 @@ python -m app.scoring verify-runtime --project-root . --device cpu
 Launch the local interface:
 
 ```powershell
-python -m streamlit run app/main.py
+python -m streamlit run app/main.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-The context builder produces `artifacts/app/sequence_context.npz` and a digest-protected `sequence_context_manifest.json`. The current context contains 999 cards, 95 transformed features, and up to 11 prior vectors for a maximum sequence length of 12. The application automatically creates this context when absent and all registered upstream artifacts are available. See `app/README.md` for the complete runtime and data-handling contract.
+Open `http://127.0.0.1:8501`. Keep the launching PowerShell session active; `Ctrl+C` stops the service. If `localhost` does not resolve to the active listener, use the explicit loopback address above.
+
+The context builder produces `artifacts/app/sequence_context.npz` and a digest-protected `sequence_context_manifest.json`. The current context contains 999 cards, 95 transformed features, and up to 11 prior vectors for a maximum sequence length of 12. The application automatically creates this context when absent and all registered upstream artifacts are available. The application has no authentication or TLS layer and must not be exposed to an untrusted network without an approved access-control and reverse-proxy boundary. See `app/README.md` for the complete runtime and data-handling contract.
 
 ## Environment Setup & Verification
 
@@ -698,7 +740,7 @@ python -m app.scoring verify-runtime --project-root . --device cpu
 Start the application:
 
 ```powershell
-python -m streamlit run app/main.py
+python -m streamlit run app/main.py --server.address 127.0.0.1 --server.port 8501
 ```
 
 A successful verification command exits with status code `0`. Test failures, schema violations, artifact-digest mismatches, invalid fitting scope, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.

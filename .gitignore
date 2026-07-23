@@ -15,7 +15,8 @@ venv/
 data/processed/*
 !data/processed/README.md
 logs/
-artifacts/
+artifacts/*
+!artifacts/README.md
 
 # Large source datasets are obtained separately.
 data/*.csv

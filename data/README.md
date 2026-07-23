@@ -79,7 +79,7 @@ The files are UTF-8 without a byte-order mark, comma-delimited, double-quoted wh
 | 10 | `street` | String | Direct personal location attribute; excluded from analytical samples and displays. |
 | 11 | `city` | String | Cardholder home city; privacy-sensitive quasi-identifier. |
 | 12 | `state` | String | Cardholder home state, not merchant location. |
-| 13 | `zip` | `int64` under generic inference | Postal identifier with 4–5 source digits. `src/eda.py` reads it as a string; `src/features.py` retains pandas' inferred integer representation. Canonical categorical use requires left-zero padding to five characters before encoding. |
+| 13 | `zip` | `int64` under generic inference | Postal identifier with 4–5 source digits. `src/eda.py` reads it as a string; `src/features.py` retains pandas' inferred integer representation. The fitted frequency encoder preserves the feature stream's unpadded 4–5 digit lexical form. |
 | 14 | `lat` | `float64` | Cardholder home latitude in `[-90, 90]`. Fixed for a card within the supplied data. |
 | 15 | `long` | `float64` | Cardholder home longitude in `[-180, 180]`. Fixed for a card within the supplied data. |
 | 16 | `city_pop` | `int64` | Population associated with the cardholder home city. |
@@ -114,7 +114,7 @@ A complete chunked scan of both files establishes the following invariants:
 ### Enumerated and lexical domains
 
 - `cc_num` matches `[0-9]{11,19}` and is interpreted as an opaque string identifier.
-- Raw `zip` matches `[0-9]{4,5}`; canonical categorical form is `zfill(5)`.
+- Raw `zip` matches `[0-9]{4,5}`; the registered frequency mapping preserves that 4–5 digit lexical form without left padding.
 - `gender` is constrained to `{F, M}`.
 - `category` is constrained to `{entertainment, food_dining, gas_transport, grocery_net, grocery_pos, health_fitness, home, kids_pets, misc_net, misc_pos, personal_care, shopping_net, shopping_pos, travel}`.
 - Development `state` values cover `{AK, AL, AR, AZ, CA, CO, CT, DC, DE, FL, GA, HI, IA, ID, IL, IN, KS, KY, LA, MA, MD, ME, MI, MN, MO, MS, MT, NC, ND, NE, NH, NJ, NM, NV, NY, OH, OK, OR, PA, RI, SC, SD, TN, TX, UT, VA, VT, WA, WI, WV, WY}`; the holdout contains the same domain except `DE`.

@@ -165,6 +165,13 @@ python -m src.models.hybrid_train simulate-drift
 python -m src.models.hybrid_train summarize
 ```
 
+Build and verify the compact application sequence context:
+
+```powershell
+python -m app.scoring build-context --project-root .
+python -m app.scoring verify-runtime --project-root . --device cpu
+```
+
 CLI outputs are write-once unless `--force` is supplied. JSON and feature outputs are written through temporary paths and atomically moved into place after successful serialization.
 
 ## Retention and Access Controls

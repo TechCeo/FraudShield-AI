@@ -20,12 +20,25 @@ Run commands from the repository root:
 python -m pip install -r requirements.txt
 python -m app.scoring build-context --project-root .
 python -m app.scoring verify-runtime --project-root . --device cpu
-python -m streamlit run app/main.py
+python -m streamlit run app/main.py --server.address 127.0.0.1 --server.port 8501
 ```
 
 `build-context` is write-once by default. Use `--force` only when a registered upstream model-data or sequence artifact has changed. The application builds the context automatically when it is absent and all required upstream artifacts are available.
 
-The default local address is `http://localhost:8501`.
+Open `http://127.0.0.1:8501`. If `localhost` does not resolve to the active listener, continue using the explicit loopback address. The launching terminal must remain active; press `Ctrl+C` there to stop the service.
+
+## Runtime Security Boundary
+
+The application is a local analytical review surface. It does not implement user authentication, role-based authorization, TLS termination, request-rate controls, or centralized secrets management.
+
+- Bind to `127.0.0.1` for local-only use.
+- Do not expose port `8501` to an untrusted network.
+- Use an approved authenticated reverse proxy and TLS boundary before any shared deployment.
+- Treat uploaded CSVs, scored outputs, feedback, and runtime context as restricted transaction data.
+- The application does not execute automatic retraining or model replacement.
+- Streamlit process logs are diagnostic and are not authoritative prediction or feedback records.
+
+An `ERR_CONNECTION_REFUSED` response means no process is listening at the requested address. Start the command above in a persistent terminal and confirm `http://127.0.0.1:8501` while that process remains active.
 
 ## Input Contract
 
