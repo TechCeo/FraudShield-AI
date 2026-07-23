@@ -24,7 +24,7 @@ The executable codebase provides:
 - deterministic exploratory profiling and visualization;
 - validation of time ordering, coordinates, currency precision, timestamp ties, state continuity, label independence, artifact integrity, and fitting scope.
 
-The repository contains fitted classical, neural, and hybrid estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, drift references, latency measurements, model reports, and evaluation matrices. The warm hybrid engine scores prepared static and sequential inputs; raw-request orchestration and an application endpoint are not present.
+The repository contains fitted classical, neural, and hybrid estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, drift references, latency measurements, model reports, evaluation matrices, and a local Streamlit scoring interface. The application validates raw manual or uploaded transactions, reproduces causal static and sequential context, explains model evidence, and captures reviewer feedback locally.
 
 ### Design and performance objectives
 
@@ -65,6 +65,9 @@ The repository contains fitted classical, neural, and hybrid estimators with val
 | `src/models/hybrid.py` | Validation-only probability fusion, component lineage verification, warm prepared-feature inference, latency measurement, and operational trade-off reporting. |
 | `src/models/drift.py` | Quantile-binned feature PSI, prediction-distribution statistics, reference persistence, and controlled drift simulation. |
 | `src/models/hybrid_train.py` | Hybrid optimization, latency measurement, drift simulation, and six-model report consolidation CLI. |
+| `app/scoring.py` | Raw transaction validation, compact online sequence context, session-isolated causal state, hybrid scoring, and local XGBoost evidence. |
+| `app/feedback.py` | Concurrency-safe SQLite reviewer feedback and controlled export. |
+| `app/main.py` | Streamlit manual scoring, batch review, model explanation, monitoring, and feedback interface. |
 | `src/utils.py` | Atomic JSON persistence, stable JSON digests, file hashing, and runtime dependency capture. |
 | `src/eda.py` | Exact chunked profiling, deterministic sampling, aggregate quality checks, and pre-sampling feature computation. |
 | `notebooks/01_eda.ipynb` | Correlation, imbalance, amount, distance, temporal, and geographic visualizations using outputs from `src/eda.py`. |
@@ -75,6 +78,7 @@ The repository contains fitted classical, neural, and hybrid estimators with val
 | `tests/test_models.py` | Probability, threshold, estimator-factory, search-determinism, report-integrity, and model-artifact tests. |
 | `tests/test_deep_models.py` | Neural shapes, training sampling, cross-partition sequence causality, restricted weight loading, and neural search tests. |
 | `tests/test_hybrid.py` | Fusion constraints, warm inference decisions, latency contracts, drift separation, and detector persistence tests. |
+| `tests/test_app.py` | Raw input, event-clock, card-precision, session state, sequence causality, and feedback persistence tests. |
 | `data/` | Immutable raw CSV inputs and the `processed/` destination for generated feature, state, partition, and preprocessing artifacts. |
 
 ### Data lineage
@@ -144,6 +148,17 @@ fraudTrain_features.csv.gz                fraudTest_features.csv.gz
                          v                         v
                 holdout evaluation       feature/score drift
                                              monitoring
+                         |
+                         v
+              compact online sequence context
+                         |
+                         v
+             session-isolated Streamlit scoring
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+        manual/batch review   local feedback ledger
 ```
 
 `process_csv` does not inspect `is_fraud`; changing or removing the label does not change engineered features. The output retains every source column except the redundant export index by default, then appends the registered feature columns below.
@@ -514,6 +529,45 @@ python -m src.models.hybrid_train --device cpu run-all
 
 Outputs are stored under `artifacts/models/`: `hybrid_config.json`, `hybrid_report.json`, `hybrid_probabilities.npz`, `latency_benchmark.json`, `drift_detector.json`, `drift_simulation_report.json`, `hybrid_evaluation_matrix.json`, and `operational_tradeoff_matrix.json`. JSON artifacts are content-digest protected, and the hybrid report fingerprints its prediction cache and every component lineage.
 
+## Interactive Application Runtime
+
+The Streamlit application exposes three operational surfaces:
+
+| Surface | Behavior |
+|---|---|
+| Manual scoring | Accepts raw transaction, cardholder, merchant, and geographic values; computes causal features and sequences; presents hybrid risk, component consensus, local evidence, and reviewer controls. |
+| Batch review | Accepts CSV files of up to 10,000 rows, preserves causal relationships within the upload, returns downloadable scores, and accepts row-level reviewer labels. |
+| System monitor | Presents the registered drift scenarios, out-of-time feature drift, six-model quality matrix, runtime context dimensions, session volume, and feedback count. |
+
+Every browser session receives independent velocity and sequence state initialized from the registered holdout-continuation baseline. State advances only after the complete submission succeeds. Same-time card transactions remain mutually invisible, and nondecreasing per-card `unix_time` is enforced. Batch submissions are non-committing by default; reviewers can explicitly continue session history with uploaded rows.
+
+### Application input schema
+
+Required raw fields are `trans_date_trans_time`, `cc_num`, `merchant`, `category`, `amt`, `city`, `state`, `zip`, `lat`, `long`, `city_pop`, `job`, `dob`, `merch_lat`, and `merch_long`. `trans_num` and `unix_time` are optional. Missing transaction identifiers are generated deterministically. Missing causal timestamps are derived from the display time using the dataset's documented seven-year clock offset. Floating-point card identifiers are rejected to prevent irreversible precision loss.
+
+The application calculates Haversine distance, velocity, cumulative behavior, frozen preprocessing, and causal LSTM context internally. XGBoost, FNN, and LSTM component probabilities feed the registered 56% / 9.25% / 34.75% log-odds fusion. Explanations show component consensus, behavioral context, and the eight largest absolute XGBoost log-odds contributions. XGBoost contributions describe that component and are not presented as a complete attribution of the nonlinear hybrid.
+
+### Feedback persistence
+
+`Confirm Fraud` and `False Positive` write idempotently to `artifacts/app/feedback.sqlite3`. The local ledger stores prediction lineage, submitted values, engineered behavior, component scores, final risk, threshold, decision, sequence depth, and reviewer label. Feedback does not modify the active model automatically. It can be exported from the sidebar for a separately controlled retraining intake.
+
+### Application commands
+
+Build and verify the compact per-card sequence continuation context:
+
+```powershell
+python -m app.scoring build-context --project-root .
+python -m app.scoring verify-runtime --project-root . --device cpu
+```
+
+Launch the local interface:
+
+```powershell
+python -m streamlit run app/main.py
+```
+
+The context builder produces `artifacts/app/sequence_context.npz` and a digest-protected `sequence_context_manifest.json`. The current context contains 999 cards, 95 transformed features, and up to 11 prior vectors for a maximum sequence length of 12. The application automatically creates this context when absent and all registered upstream artifacts are available. See `app/README.md` for the complete runtime and data-handling contract.
+
 ## Environment Setup & Verification
 
 ### Prerequisites
@@ -587,6 +641,12 @@ Run the hybrid inference and drift-contract suite:
 python -m pytest tests/test_hybrid.py -q --basetemp .pytest_tmp_hybrid
 ```
 
+Run the application scoring and feedback-contract suite:
+
+```powershell
+python -m pytest tests/test_app.py -q --basetemp .pytest_tmp_app
+```
+
 Run all automated tests:
 
 ```powershell
@@ -627,6 +687,18 @@ Confirm the hybrid CLI surface without writing output files:
 
 ```powershell
 python -m src.models.hybrid_train --help
+```
+
+Verify application artifacts without starting the web server:
+
+```powershell
+python -m app.scoring verify-runtime --project-root . --device cpu
+```
+
+Start the application:
+
+```powershell
+python -m streamlit run app/main.py
 ```
 
 A successful verification command exits with status code `0`. Test failures, schema violations, artifact-digest mismatches, invalid fitting scope, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.

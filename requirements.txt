@@ -9,6 +9,7 @@ xgboost>=3.3,<3.4
 torch>=2.13,<2.14
 matplotlib>=3.8,<4.0
 seaborn>=0.13,<0.14
+streamlit>=1.59,<1.60
 
 # Notebook and verification tooling
 jupyterlab>=4.2,<5.0

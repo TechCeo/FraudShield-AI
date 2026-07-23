@@ -22,7 +22,7 @@ This directory is the controlled destination for reproducible feature, state, pa
 | `model_data/previous_transaction_index.npy` | `python -m src.models.deep_train prepare-sequences` | NumPy NPY; `int32`, 1,852,394 rows | One previous-row pointer per transaction across the complete chronological stream. Each value is `-1` or a strictly smaller global row index. |
 | `model_data/sequence_index_manifest.json` | `python -m src.models.deep_train prepare-sequences` | JSON; `fraud_sequence_index`, schema version 1 | Digest-protected pointer identity, partition offsets, ordered transaction-key fingerprints, cold-start counts, card count, feature-stream lineage, split identity, and model-data identity. |
 
-`prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators, hybrid configuration, prediction cache, drift references, latency measurements, and evaluation reports are stored under `artifacts/models/`, outside this directory.
+`prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators, hybrid configuration, prediction cache, drift references, latency measurements, and evaluation reports are stored under `artifacts/models/`. Compact application sequence context and reviewer feedback are stored under `artifacts/app/`.
 
 ## Data Lineage and Dependency Rules
 
@@ -61,6 +61,11 @@ train/validation/holdout matrices --> model_data/model_data_manifest.json
                                                            +-- warm hybrid inference
                                                            |
                                                            +-- latency + drift registries
+                                                           |
+                                                           +-- compact app context
+                                                                   |
+                                                                   +-- session scoring
+                                                                   +-- local feedback
 
 split_manifest.json -- training counts --> imbalance_strategy_report.json
 training matrix + training labels --------> one TrainingBatch imbalance control
@@ -80,6 +85,8 @@ The following controls are mandatory:
 - Hybrid fusion weights, blend space, and threshold must be selected from validation probabilities only; holdout probabilities cannot alter the registered configuration.
 - The warm hybrid engine must verify every component report and estimator fingerprint before scoring.
 - Drift feature and prediction references must use the same registered validation window; current windows cannot mutate the frozen reference artifact.
+- Application sessions must clone the terminal velocity state and compact sequence context; mutable card history cannot be shared between browser sessions.
+- Application state advances only after the complete submitted transaction set passes validation and inference.
 - Every sequence pointer must be `-1` or strictly smaller than its row; partition transaction-key digests must match the split manifest.
 - Validation sequences may use training feature history, and holdout sequences may use development feature history. Sequence inputs never contain targets or future rows.
 
