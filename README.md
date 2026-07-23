@@ -13,13 +13,15 @@ The executable codebase provides:
 - mutually exclusive class weighting, random under-sampling, and mixed-data SMOTENC controls restricted to training rows;
 - persisted sparse model-data partitions bound to raw, feature, split, and preprocessing fingerprints;
 - class-weighted logistic regression and random forest classifiers plus histogram-based XGBoost;
+- a feedforward neural network over static engineered features;
+- a unidirectional LSTM over strictly prior same-card transaction sequences;
 - deterministic random search against an isolated chronological validation set;
 - validation-derived F2 decision thresholds and holdout evaluation centered on fraud recall, precision, and average precision;
 - integrity-bound estimator reports and a cross-model evaluation registry;
 - deterministic exploratory profiling and visualization;
 - validation of time ordering, coordinates, currency precision, timestamp ties, state continuity, label independence, artifact integrity, and fitting scope.
 
-The repository contains fitted classical estimators and their validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, native or trusted-internal estimator artifacts, model reports, and an evaluation matrix. A scoring endpoint and application runtime are not present.
+The repository contains fitted classical and neural estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, model reports, and evaluation matrices. A scoring endpoint and application runtime are not present.
 
 ### Design and performance objectives
 
@@ -30,6 +32,7 @@ The repository contains fitted classical estimators and their validation-selecte
 | Determinism | Uses explicit window boundaries, integer-cent accumulation, stable timestamp handling, ordered transaction-key fingerprints, fixed random seeds, and digest-protected JSON artifacts. |
 | Scalability | Reads CSV input in configurable chunks; feature state scales with retained card histories, while `fit_csv` stores numeric fitting values in a temporary disk-backed matrix and keeps only categorical aggregates in memory. |
 | Stream continuity | Carries per-card state across sequential files so known cards do not receive artificial empty histories at partition boundaries. |
+| Sequence causality | Represents each transaction with the current row and a bounded chain of strictly earlier same-card rows; future rows and labels never enter a sequence. |
 | Evaluation integrity | Fits transformation statistics and applies sampling only to the chronological training partition; validation and holdout prevalence remain unchanged. |
 | Model selection integrity | Ranks candidates by validation average precision, freezes an F2 threshold from validation probabilities, and evaluates only the winning estimator on the holdout. |
 | Artifact traceability | Binds every model report to its estimator digest, model-data manifest, feature schema, parameters, dependency versions, and random seed. |
@@ -51,6 +54,11 @@ The repository contains fitted classical estimators and their validation-selecte
 | `src/models/evaluation.py` | Average precision, PR-AUC, calibration metrics, operating metrics, and validation-only F2 threshold selection. |
 | `src/models/search.py` | Deterministic random parameter sampling, candidate fitting, winner selection, estimator persistence, and evaluation registries. |
 | `src/models/train.py` | Model-data preparation, per-model fitting, complete classifier execution, and report consolidation CLI. |
+| `src/models/deep_common.py` | Deterministic PyTorch configuration, training-only endpoint sampling, sparse minibatch materialization, and restricted neural weight persistence. |
+| `src/models/fnn.py` | Static feedforward architecture, optimization loop, early stopping, inference, and artifact loading. |
+| `src/models/sequences.py` | Digest-bound previous-transaction pointers, cross-partition sparse access, chronological padding, and sequence minibatches. |
+| `src/models/lstm.py` | Unidirectional packed-sequence LSTM, optimization loop, early stopping, inference, and artifact loading. |
+| `src/models/deep_train.py` | Sequence preparation, neural fitting, and combined classifier comparison CLI. |
 | `src/utils.py` | Atomic JSON persistence, stable JSON digests, file hashing, and runtime dependency capture. |
 | `src/eda.py` | Exact chunked profiling, deterministic sampling, aggregate quality checks, and pre-sampling feature computation. |
 | `notebooks/01_eda.ipynb` | Correlation, imbalance, amount, distance, temporal, and geographic visualizations using outputs from `src/eda.py`. |
@@ -59,6 +67,7 @@ The repository contains fitted classical estimators and their validation-selecte
 | `tests/test_eda.py` | Profiling, sampling, privacy, aggregation, and source-fingerprint tests. |
 | `tests/test_preprocessing.py` | Temporal partition, train-only fitting, artifact-integrity, encoding, class-weighting, and resampling tests. |
 | `tests/test_models.py` | Probability, threshold, estimator-factory, search-determinism, report-integrity, and model-artifact tests. |
+| `tests/test_deep_models.py` | Neural shapes, training sampling, cross-partition sequence causality, restricted weight loading, and neural search tests. |
 | `data/` | Immutable raw CSV inputs and the `processed/` destination for generated feature, state, partition, and preprocessing artifacts. |
 
 ### Data lineage
@@ -104,18 +113,24 @@ fraudTrain_features.csv.gz                fraudTest_features.csv.gz
                                      v
                         registered sparse CSR partitions
                                      |
-                  +------------------+------------------+
-                  |                  |                  |
-                  v                  v                  v
-          logistic regression  random forest       XGBoost
-                  |                  |                  |
-                  +------ validation AP ranking -------+
-                                     |
-                                     v
-                         validation F2 threshold
-                                     |
-                                     v
-                      winner-only holdout evaluation
+                  +-------------+------------+-------------+
+                  |             |            |             |
+                  v             v            v             v
+          logistic/forest    XGBoost     static FNN   previous-row index
+                                                            |
+                                                            v
+                                                     causal card LSTM
+                  |             |            |             |
+                  +-------------+------------+-------------+
+                                      |
+                                      v
+                          validation AP ranking
+                                      |
+                                      v
+                          validation F2 threshold
+                                      |
+                                      v
+                       winner-only holdout evaluation
 ```
 
 `process_csv` does not inspect `is_fraud`; changing or removing the label does not change engineered features. The output retains every source column except the redundant export index by default, then appends the registered feature columns below.
@@ -333,6 +348,80 @@ python -m src.models.train summarize
 
 Model-data outputs are written under `data/processed/model_data/`; fitted estimators and reports are written under `artifacts/models/`. Existing registered outputs are rejected unless the global `--force` option is supplied before the subcommand. Generated transaction matrices and model artifacts are excluded from version control.
 
+## Neural Classifier Registry
+
+### Static FNN contract
+
+The static network consumes the same 95 ordered features as the classical estimators. Sparse CSR rows are materialized only for the active minibatch. The registered architecture uses two GELU and LayerNorm hidden blocks, dropout, and a single fraud logit. Training uses AdamW, gradient clipping, weighted `BCEWithLogitsLoss`, all fraud endpoints, and a deterministic training-only negative sample refreshed by epoch.
+
+| Setting | Registered value |
+|---|---|
+| Hidden widths | 64, 32 |
+| Dropout | 0.20 |
+| Batch size | 2,048 |
+| Learning rate | 0.001 |
+| Weight decay | 0.00001 |
+| Training negative/fraud endpoint cap | 40:1 |
+| Positive-loss multiplier | 0.50 of sampled negative/fraud ratio |
+| Selected epoch | 6 |
+
+### Sequential LSTM contract
+
+`previous_transaction_index.npy` stores one `int32` pointer per transaction across training, validation, and holdout. A pointer is either `-1` or strictly less than the active global row. Sequence batches follow the pointers backward, restore oldest-to-current order, and use packed lengths so padding is ignored. Validation endpoints may inherit training history, and holdout endpoints may inherit development history; neither partition can point forward. Targets are endpoint labels only and are never sequence inputs.
+
+The registered LSTM projects each 95-feature row to 64 dimensions, processes up to 12 transactions through two unidirectional 64-unit recurrent layers, and emits one fraud logit from the final valid hidden state.
+
+| Setting | Registered value |
+|---|---|
+| Sequence length | 12 transactions |
+| Input projection | 64 |
+| Hidden size | 64 |
+| Recurrent layers | 2 |
+| Dropout | 0.10 |
+| Batch size | 1,024 |
+| Learning rate | 0.0007 |
+| Weight decay | 0.00001 |
+| Training negative/fraud endpoint cap | 20:1 |
+| Positive-loss multiplier | 1.00 of sampled negative/fraud ratio |
+| Selected epoch | 5 |
+
+### Combined evaluation
+
+Every row below uses the same frozen preprocessing schema, chronological partitions, validation average-precision selection rule, validation F2 threshold rule, and untouched out-of-time holdout.
+
+| Classifier | Validation AP | Holdout AP | Holdout PR-AUC | Holdout recall | Holdout precision | Holdout FPR | Alert rate | Frozen threshold |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Logistic regression | 0.601922 | 0.537643 | 0.537603 | 0.580420 | 0.359411 | 0.004008 | 0.006233 | 0.870336 |
+| Static FNN | 0.902201 | 0.850898 | 0.850878 | 0.873660 | 0.539591 | 0.002889 | 0.006250 | 0.906579 |
+| Random forest | 0.943986 | 0.900815 | 0.900809 | 0.877855 | 0.743094 | 0.001176 | 0.004560 | 0.273135 |
+| Causal LSTM | 0.957186 | 0.931596 | 0.931586 | **0.951049** | 0.562603 | 0.002865 | 0.006525 | 0.774295 |
+| XGBoost | **0.980621** | **0.965863** | **0.965858** | 0.945455 | **0.843945** | **0.000677** | **0.004324** | 0.233010 |
+
+XGBoost remains the strongest holdout ranking and precision model. The LSTM produces the highest holdout recall, detecting 2,040 of 2,145 fraud rows, but its lower precision produces 1,586 false alerts. The FNN materially exceeds logistic regression while remaining below the sequential and tree-based nonlinear estimators.
+
+### Neural commands
+
+Create and verify the global causal pointer index:
+
+```powershell
+python -m src.models.deep_train prepare-sequences
+```
+
+Optimize each neural classifier:
+
+```powershell
+python -m src.models.deep_train --device auto fit --model fnn
+python -m src.models.deep_train --device auto fit --model lstm
+```
+
+Verify all five reports and rebuild the combined registry:
+
+```powershell
+python -m src.models.deep_train summarize
+```
+
+Neural weights use PyTorch tensor artifacts loaded with `weights_only=True`. Reports bind each weight file to its SHA-256 digest, model configuration, model-data lineage, feature schema, search parameters, epoch metrics, runtime dependencies, threshold, and holdout metrics. The LSTM report additionally binds the sequence-index manifest.
+
 ## Environment Setup & Verification
 
 ### Prerequisites
@@ -394,6 +483,12 @@ Run the model-contract suite:
 python -m pytest tests/test_models.py -q --basetemp .pytest_tmp_models
 ```
 
+Run the neural-contract suite:
+
+```powershell
+python -m pytest tests/test_deep_models.py -q --basetemp .pytest_tmp_deep
+```
+
 Run all automated tests:
 
 ```powershell
@@ -422,6 +517,12 @@ Confirm the classifier CLI surface without writing output files:
 
 ```powershell
 python -m src.models.train --help
+```
+
+Confirm the neural CLI surface without writing output files:
+
+```powershell
+python -m src.models.deep_train --help
 ```
 
 A successful verification command exits with status code `0`. Test failures, schema violations, artifact-digest mismatches, invalid fitting scope, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.

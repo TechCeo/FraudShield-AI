@@ -331,6 +331,12 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return document
 
 
+def load_model_data_manifest(output_dir: str | Path) -> dict[str, Any]:
+    """Load and verify the model-data registry without materializing matrices."""
+
+    return _load_manifest(Path(output_dir) / "model_data_manifest.json")
+
+
 def load_model_dataset(output_dir: str | Path, *, verify_hashes: bool = True) -> ModelDataset:
     """Load registered sparse partitions and verify their shape and integrity."""
 

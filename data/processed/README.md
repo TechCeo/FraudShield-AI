@@ -19,6 +19,8 @@ This directory is the controlled destination for reproducible feature, state, pa
 | `model_data/holdout_features.npz` | `python -m src.models.train prepare-data` | SciPy CSR NPZ; `float32`, 555,719 x 95 | Sparse out-of-time classifier input transformed with frozen training state. |
 | `model_data/*_target.npy` | `python -m src.models.train prepare-data` | NumPy NPY; `int8` | Binary labels aligned one-to-one with each registered sparse matrix. Pickle loading is disabled. |
 | `model_data/model_data_manifest.json` | `python -m src.models.train prepare-data` | JSON; `fraud_model_data`, schema version 1 | Digest-protected registry of matrix shapes, nonzero counts, file fingerprints, labels, ordered feature names, preprocessing identity, feature-stream fingerprints, and split identity. |
+| `model_data/previous_transaction_index.npy` | `python -m src.models.deep_train prepare-sequences` | NumPy NPY; `int32`, 1,852,394 rows | One previous-row pointer per transaction across the complete chronological stream. Each value is `-1` or a strictly smaller global row index. |
+| `model_data/sequence_index_manifest.json` | `python -m src.models.deep_train prepare-sequences` | JSON; `fraud_sequence_index`, schema version 1 | Digest-protected pointer identity, partition offsets, ordered transaction-key fingerprints, cold-start counts, card count, feature-stream lineage, split identity, and model-data identity. |
 
 `prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators and evaluation reports are stored under `artifacts/models/`, outside this directory.
 
@@ -44,9 +46,15 @@ immutable raw files
 
 train/validation/holdout matrices --> model_data/model_data_manifest.json
             |
-            +-- training fit + validation selection --> artifacts/models/*
-                                                        |
-                                                        +-- frozen threshold holdout scoring
+            +-- static training + validation selection --> artifacts/models/fnn.*
+            |
+            +-- ordered transaction keys --> previous_transaction_index.npy
+                                              |
+                                              +-- causal sequence training --> artifacts/models/lstm.*
+            |
+            +-- classical training + validation selection --> artifacts/models/*
+                                                               |
+                                                               +-- frozen threshold holdout scoring
 
 split_manifest.json -- training counts --> imbalance_strategy_report.json
 training matrix + training labels --------> one TrainingBatch imbalance control
@@ -63,6 +71,8 @@ The following controls are mandatory:
 - JSON artifacts must pass their embedded payload digest and schema-version checks before use.
 - Sparse matrix and target fingerprints must match `model_data_manifest.json` before classifier fitting.
 - Model reports must match both their embedded payload digest and estimator SHA-256 digest before evaluation consolidation.
+- Every sequence pointer must be `-1` or strictly smaller than its row; partition transaction-key digests must match the split manifest.
+- Validation sequences may use training feature history, and holdout sequences may use development feature history. Sequence inputs never contain targets or future rows.
 
 ## Canonical Commands
 
@@ -121,6 +131,15 @@ python -m src.models.train fit --model xgboost
 python -m src.models.train summarize
 ```
 
+Create causal sequence pointers, optimize both neural classifiers, and consolidate all reports:
+
+```powershell
+python -m src.models.deep_train prepare-sequences
+python -m src.models.deep_train fit --model fnn
+python -m src.models.deep_train fit --model lstm
+python -m src.models.deep_train summarize
+```
+
 CLI outputs are write-once unless `--force` is supplied. JSON and feature outputs are written through temporary paths and atomically moved into place after successful serialization.
 
 ## Retention and Access Controls
@@ -131,5 +150,7 @@ CLI outputs are write-once unless `--force` is supplied. JSON and feature output
 - Sparse model-data matrices and targets retain row-level behavioral and label information and remain restricted.
 - Joblib estimator artifacts are trusted-internal files and must never be loaded from an unverified source; use the report fingerprint before deserialization.
 - Native XGBoost JSON is the registered portable format for the boosted classifier.
+- Neural tensor artifacts are loaded through PyTorch's restricted `weights_only=True` path and must still match their report fingerprints.
+- The sequence pointer array contains row relationships but no labels or raw account identifiers; it remains internal because it exposes transaction linkage and partition topology.
 - The split and imbalance manifests contain file-system paths, fingerprints, time bounds, and label aggregates. They do not contain row-level transactions but remain internal operational metadata.
 - Delete or replace generated artifacts only after confirming that dependent matrices, reports, or model artifacts are no longer in use. Recompute downstream consumers whenever an upstream fingerprint or schema digest changes.

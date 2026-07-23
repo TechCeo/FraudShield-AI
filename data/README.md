@@ -161,14 +161,15 @@ The prevalence difference is recorded as contract and monitoring context only; i
 7. **Row identity:** `trans_num` must remain unique and in source order. The split manifest stores an ordered-key digest for every partition, and manifest-bound preprocessing rejects reordered, duplicated, or substituted training rows.
 8. **Cold starts:** A card absent from the incoming serialized state receives zero rolling and all-prior values until earlier events for that card exist in the active stream.
 9. **Timestamp ties:** Transactions sharing `(cc_num, unix_time)` cannot observe one another. Their aggregate becomes visible only at a strictly later timestamp.
-10. **Readable timestamp artifact:** Between source indices `100531` and `100532`, the development display timestamp moves from `2019-02-28 23:59:40` to `2019-02-28 00:02:34` while `unix_time` increases from `1330473580` to `1330473754`. Calendar plots may use `trans_date_trans_time`; causal calculations do not.
-11. **Calendar offset artifact:** Decoding `unix_time` nominally produces the same month, day, and time seven calendar years earlier than `trans_date_trans_time`; source events on `2012-02-29` are remapped to display date `2019-02-28`. The fields are two representations of one event clock and must not be treated as independent predictive signals.
+10. **Sequential endpoints:** A sequential classifier may use the current transformed row and strictly earlier same-card transformed rows. Validation endpoints may inherit training history, and holdout endpoints may inherit development history. Targets, future rows, and same-time peers are not sequence inputs.
+11. **Readable timestamp artifact:** Between source indices `100531` and `100532`, the development display timestamp moves from `2019-02-28 23:59:40` to `2019-02-28 00:02:34` while `unix_time` increases from `1330473580` to `1330473754`. Calendar plots may use `trans_date_trans_time`; causal calculations do not.
+12. **Calendar offset artifact:** Decoding `unix_time` nominally produces the same month, day, and time seven calendar years earlier than `trans_date_trans_time`; source events on `2012-02-29` are remapped to display date `2019-02-28`. The fields are two representations of one event clock and must not be treated as independent predictive signals.
 
 ## Storage and Handling Rules
 
 - Raw CSV files are immutable source assets and remain directly under `data/`.
 - Generated feature streams and serialized velocity state are written under `data/processed/`.
-- Split manifests, preprocessing artifacts, imbalance-strategy reports, and sparse model-data registries are written under `data/processed/` and verified by embedded payload or file digests.
+- Split manifests, preprocessing artifacts, imbalance-strategy reports, sparse model-data registries, and sequence-index registries are written under `data/processed/` and verified by embedded payload or file digests.
 - The feature CLI retains raw source columns except `Unnamed: 0` by default. Generated feature streams therefore remain privacy-sensitive and require the same access controls as the raw files.
 - Names, addresses, full card identifiers, dates of birth, and transaction identifiers are excluded from notebook displays and deterministic analytical samples.
 - Raw and generated transaction files are excluded from version control by `.gitignore`.
