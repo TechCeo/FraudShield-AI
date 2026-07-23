@@ -15,13 +15,16 @@ The executable codebase provides:
 - class-weighted logistic regression and random forest classifiers plus histogram-based XGBoost;
 - a feedforward neural network over static engineered features;
 - a unidirectional LSTM over strictly prior same-card transaction sequences;
+- a validation-optimized log-odds fusion of XGBoost, FNN, and LSTM probabilities;
+- warm prepared-feature inference with frozen-threshold fraud decisions;
+- feature and prediction drift monitoring using PSI, Kolmogorov-Smirnov, and Wasserstein statistics;
 - deterministic random search against an isolated chronological validation set;
 - validation-derived F2 decision thresholds and holdout evaluation centered on fraud recall, precision, and average precision;
 - integrity-bound estimator reports and a cross-model evaluation registry;
 - deterministic exploratory profiling and visualization;
 - validation of time ordering, coordinates, currency precision, timestamp ties, state continuity, label independence, artifact integrity, and fitting scope.
 
-The repository contains fitted classical and neural estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, model reports, and evaluation matrices. A scoring endpoint and application runtime are not present.
+The repository contains fitted classical, neural, and hybrid estimators with validation-selected decision thresholds. Its operational outputs include feature-enriched transaction streams, causal velocity state, a chronological split manifest, a JSON-serialized preprocessing contract, imbalance-control metadata, registered sparse `float32` partitions, a causal per-card sequence index, native or restricted-load estimator artifacts, drift references, latency measurements, model reports, and evaluation matrices. The warm hybrid engine scores prepared static and sequential inputs; raw-request orchestration and an application endpoint are not present.
 
 ### Design and performance objectives
 
@@ -59,6 +62,9 @@ The repository contains fitted classical and neural estimators with validation-s
 | `src/models/sequences.py` | Digest-bound previous-transaction pointers, cross-partition sparse access, chronological padding, and sequence minibatches. |
 | `src/models/lstm.py` | Unidirectional packed-sequence LSTM, optimization loop, early stopping, inference, and artifact loading. |
 | `src/models/deep_train.py` | Sequence preparation, neural fitting, and combined classifier comparison CLI. |
+| `src/models/hybrid.py` | Validation-only probability fusion, component lineage verification, warm prepared-feature inference, latency measurement, and operational trade-off reporting. |
+| `src/models/drift.py` | Quantile-binned feature PSI, prediction-distribution statistics, reference persistence, and controlled drift simulation. |
+| `src/models/hybrid_train.py` | Hybrid optimization, latency measurement, drift simulation, and six-model report consolidation CLI. |
 | `src/utils.py` | Atomic JSON persistence, stable JSON digests, file hashing, and runtime dependency capture. |
 | `src/eda.py` | Exact chunked profiling, deterministic sampling, aggregate quality checks, and pre-sampling feature computation. |
 | `notebooks/01_eda.ipynb` | Correlation, imbalance, amount, distance, temporal, and geographic visualizations using outputs from `src/eda.py`. |
@@ -68,6 +74,7 @@ The repository contains fitted classical and neural estimators with validation-s
 | `tests/test_preprocessing.py` | Temporal partition, train-only fitting, artifact-integrity, encoding, class-weighting, and resampling tests. |
 | `tests/test_models.py` | Probability, threshold, estimator-factory, search-determinism, report-integrity, and model-artifact tests. |
 | `tests/test_deep_models.py` | Neural shapes, training sampling, cross-partition sequence causality, restricted weight loading, and neural search tests. |
+| `tests/test_hybrid.py` | Fusion constraints, warm inference decisions, latency contracts, drift separation, and detector persistence tests. |
 | `data/` | Immutable raw CSV inputs and the `processed/` destination for generated feature, state, partition, and preprocessing artifacts. |
 
 ### Data lineage
@@ -124,13 +131,19 @@ fraudTrain_features.csv.gz                fraudTest_features.csv.gz
                   +-------------+------------+-------------+
                                       |
                                       v
-                          validation AP ranking
+                     validation-only log-odds fusion
                                       |
                                       v
-                          validation F2 threshold
+                       validation F2 threshold
                                       |
                                       v
-                       winner-only holdout evaluation
+                  warm risk scoring and fraud decision
+                                      |
+                         +------------+------------+
+                         |                         |
+                         v                         v
+                holdout evaluation       feature/score drift
+                                             monitoring
 ```
 
 `process_csv` does not inspect `is_fraud`; changing or removing the label does not change engineered features. The output retains every source column except the redundant export index by default, then appends the registered feature columns below.
@@ -385,19 +398,20 @@ The registered LSTM projects each 95-feature row to 64 dimensions, processes up 
 | Positive-loss multiplier | 1.00 of sampled negative/fraud ratio |
 | Selected epoch | 5 |
 
-### Combined evaluation
+### Complete classifier evaluation
 
-Every row below uses the same frozen preprocessing schema, chronological partitions, validation average-precision selection rule, validation F2 threshold rule, and untouched out-of-time holdout.
+Every row below uses the same frozen preprocessing schema, chronological partitions, validation average-precision selection rule, validation F2 threshold rule, and untouched out-of-time holdout. The hybrid candidate weights, blend space, and decision threshold are selected without holdout labels.
 
 | Classifier | Validation AP | Holdout AP | Holdout PR-AUC | Holdout recall | Holdout precision | Holdout FPR | Alert rate | Frozen threshold |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Logistic regression | 0.601922 | 0.537643 | 0.537603 | 0.580420 | 0.359411 | 0.004008 | 0.006233 | 0.870336 |
 | Static FNN | 0.902201 | 0.850898 | 0.850878 | 0.873660 | 0.539591 | 0.002889 | 0.006250 | 0.906579 |
 | Random forest | 0.943986 | 0.900815 | 0.900809 | 0.877855 | 0.743094 | 0.001176 | 0.004560 | 0.273135 |
-| Causal LSTM | 0.957186 | 0.931596 | 0.931586 | **0.951049** | 0.562603 | 0.002865 | 0.006525 | 0.774295 |
-| XGBoost | **0.980621** | **0.965863** | **0.965858** | 0.945455 | **0.843945** | **0.000677** | **0.004324** | 0.233010 |
+| Causal LSTM | 0.957186 | 0.931596 | 0.931586 | 0.951049 | 0.562603 | 0.002865 | 0.006525 | 0.774295 |
+| XGBoost | 0.980621 | 0.965863 | 0.965858 | 0.945455 | 0.843945 | 0.000677 | 0.004324 | 0.233010 |
+| Hybrid | **0.986636** | **0.976708** | **0.976705** | **0.957576** | **0.879281** | **0.000509** | **0.004204** | 0.472196 |
 
-XGBoost remains the strongest holdout ranking and precision model. The LSTM produces the highest holdout recall, detecting 2,040 of 2,145 fraud rows, but its lower precision produces 1,586 false alerts. The FNN materially exceeds logistic regression while remaining below the sequential and tree-based nonlinear estimators.
+The hybrid has the strongest registered holdout ranking, recall, precision, and false-positive rate. At its frozen threshold it detects 2,054 of 2,145 fraud rows and produces 282 false positives.
 
 ### Neural commands
 
@@ -421,6 +435,84 @@ python -m src.models.deep_train summarize
 ```
 
 Neural weights use PyTorch tensor artifacts loaded with `weights_only=True`. Reports bind each weight file to its SHA-256 digest, model configuration, model-data lineage, feature schema, search parameters, epoch metrics, runtime dependencies, threshold, and holdout metrics. The LSTM report additionally binds the sequence-index manifest.
+
+## Hybrid Inference and Monitoring Registry
+
+### Fusion contract
+
+The hybrid consumes aligned probabilities from the registered XGBoost, FNN, and causal LSTM artifacts. Candidate weights are constrained to the probability simplex with a 5% minimum contribution from every component. Thirty-two deterministic weight vectors are evaluated in both probability and log-odds space, producing 64 candidates. Validation average precision ranks candidates; validation F2, recall, and precision break ties. The holdout is scored only after the fusion rule and threshold are frozen.
+
+| Setting | Registered value |
+|---|---|
+| Blend space | Log-odds |
+| XGBoost weight | 0.5600 |
+| FNN weight | 0.0925 |
+| LSTM weight | 0.3475 |
+| Decision threshold | 0.472196 |
+| Threshold objective | Validation F2 |
+| Validation AP | 0.986636 |
+| Holdout AP | 0.976708 |
+
+`HybridInferenceEngine.load` verifies the content digests of the hybrid configuration and all component reports, verifies estimator fingerprints, loads the component models once, and places neural modules in evaluation mode. `predict_prepared` accepts aligned static features, length-12 causal sequences, and sequence lengths. It returns the three component probabilities, fused fraud probability, and a Boolean decision using the frozen threshold. Neural execution runs under `torch.inference_mode()`.
+
+### Prepared-feature latency
+
+The registered benchmark uses a six-thread CPU runtime, three warm-up calls, and 20 measured calls per batch size. Models are already loaded and inputs are already transformed; raw parsing, feature engineering, preprocessing, sequence assembly, process startup, and network overhead are outside the measurement scope.
+
+| Classifier | Batch-1 p50 (ms) | Batch-1 p95 (ms) | Batch-256 p50 per transaction (ms) | Batch-256 p50 throughput (transactions/s) |
+|---|---:|---:|---:|---:|
+| Logistic regression | 0.120 | 0.132 | 0.000512 | 1,954,198 |
+| XGBoost | 0.563 | 0.665 | 0.005430 | 184,146 |
+| Static FNN | 0.449 | 0.511 | 0.002380 | 420,120 |
+| Causal LSTM | 1.391 | 2.031 | 0.014886 | 67,178 |
+| Hybrid | 2.771 | 3.745 | 0.032876 | 30,417 |
+| Random forest | 33.665 | 38.256 | 0.113780 | 8,789 |
+
+### Drift contract
+
+`DriftDetector` freezes both feature and hybrid-score references from the same chronological validation window. It samples at most 100,000 feature rows and 10,000 probabilities with a fixed seed. Each of the 95 transformed features is monitored with quantile-binned population stability index (PSI). Hybrid scores additionally report PSI, a two-sample Kolmogorov-Smirnov statistic and p-value, and first Wasserstein distance.
+
+| PSI | Status |
+|---:|---|
+| `< 0.10` | `stable` |
+| `0.10` to `< 0.25` | `warning` |
+| `>= 0.25` | `critical` |
+
+The reference validation window is stable by construction. The out-of-time holdout reports critical feature drift in calendar and lifetime-cumulative fields while its hybrid-score PSI remains stable at 0.002534. The controlled simulation adds 1.5 standardized units to amount, distance, 24-hour transaction count, and 24-hour spend plus a 0.75 log-odds score shift; both feature and prediction monitoring classify it as critical.
+
+### Hybrid commands
+
+Optimize fusion weights and persist the frozen configuration:
+
+```powershell
+python -m src.models.hybrid_train --device cpu fit
+```
+
+Measure all six warm classifiers on prepared inputs:
+
+```powershell
+python -m src.models.hybrid_train --device cpu benchmark
+```
+
+Create drift references and evaluate registered and controlled windows:
+
+```powershell
+python -m src.models.hybrid_train simulate-drift
+```
+
+Rebuild the quality and operational trade-off matrices:
+
+```powershell
+python -m src.models.hybrid_train summarize
+```
+
+Run the complete hybrid, latency, drift, and consolidation workflow:
+
+```powershell
+python -m src.models.hybrid_train --device cpu run-all
+```
+
+Outputs are stored under `artifacts/models/`: `hybrid_config.json`, `hybrid_report.json`, `hybrid_probabilities.npz`, `latency_benchmark.json`, `drift_detector.json`, `drift_simulation_report.json`, `hybrid_evaluation_matrix.json`, and `operational_tradeoff_matrix.json`. JSON artifacts are content-digest protected, and the hybrid report fingerprints its prediction cache and every component lineage.
 
 ## Environment Setup & Verification
 
@@ -489,6 +581,12 @@ Run the neural-contract suite:
 python -m pytest tests/test_deep_models.py -q --basetemp .pytest_tmp_deep
 ```
 
+Run the hybrid inference and drift-contract suite:
+
+```powershell
+python -m pytest tests/test_hybrid.py -q --basetemp .pytest_tmp_hybrid
+```
+
 Run all automated tests:
 
 ```powershell
@@ -523,6 +621,12 @@ Confirm the neural CLI surface without writing output files:
 
 ```powershell
 python -m src.models.deep_train --help
+```
+
+Confirm the hybrid CLI surface without writing output files:
+
+```powershell
+python -m src.models.hybrid_train --help
 ```
 
 A successful verification command exits with status code `0`. Test failures, schema violations, artifact-digest mismatches, invalid fitting scope, timestamp reversals, invalid coordinates, and unsupported currency precision produce nonzero exits or raised exceptions.

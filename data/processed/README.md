@@ -22,7 +22,7 @@ This directory is the controlled destination for reproducible feature, state, pa
 | `model_data/previous_transaction_index.npy` | `python -m src.models.deep_train prepare-sequences` | NumPy NPY; `int32`, 1,852,394 rows | One previous-row pointer per transaction across the complete chronological stream. Each value is `-1` or a strictly smaller global row index. |
 | `model_data/sequence_index_manifest.json` | `python -m src.models.deep_train prepare-sequences` | JSON; `fraud_sequence_index`, schema version 1 | Digest-protected pointer identity, partition offsets, ordered transaction-key fingerprints, cold-start counts, card count, feature-stream lineage, split identity, and model-data identity. |
 
-`prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators and evaluation reports are stored under `artifacts/models/`, outside this directory.
+`prepare_training_batch` remains the training-only interface for direct imbalance experiments. The classifier runtime uses registered sparse partitions and estimator-level class weighting; it does not resample validation or holdout data. Fitted estimators, hybrid configuration, prediction cache, drift references, latency measurements, and evaluation reports are stored under `artifacts/models/`, outside this directory.
 
 ## Data Lineage and Dependency Rules
 
@@ -55,6 +55,12 @@ train/validation/holdout matrices --> model_data/model_data_manifest.json
             +-- classical training + validation selection --> artifacts/models/*
                                                                |
                                                                +-- frozen threshold holdout scoring
+            |
+            +-- XGBoost + FNN + LSTM probabilities --> validation-only fusion
+                                                           |
+                                                           +-- warm hybrid inference
+                                                           |
+                                                           +-- latency + drift registries
 
 split_manifest.json -- training counts --> imbalance_strategy_report.json
 training matrix + training labels --------> one TrainingBatch imbalance control
@@ -71,6 +77,9 @@ The following controls are mandatory:
 - JSON artifacts must pass their embedded payload digest and schema-version checks before use.
 - Sparse matrix and target fingerprints must match `model_data_manifest.json` before classifier fitting.
 - Model reports must match both their embedded payload digest and estimator SHA-256 digest before evaluation consolidation.
+- Hybrid fusion weights, blend space, and threshold must be selected from validation probabilities only; holdout probabilities cannot alter the registered configuration.
+- The warm hybrid engine must verify every component report and estimator fingerprint before scoring.
+- Drift feature and prediction references must use the same registered validation window; current windows cannot mutate the frozen reference artifact.
 - Every sequence pointer must be `-1` or strictly smaller than its row; partition transaction-key digests must match the split manifest.
 - Validation sequences may use training feature history, and holdout sequences may use development feature history. Sequence inputs never contain targets or future rows.
 
@@ -140,6 +149,15 @@ python -m src.models.deep_train fit --model lstm
 python -m src.models.deep_train summarize
 ```
 
+Optimize fusion, measure prepared-feature latency, evaluate drift, and consolidate six-model registries:
+
+```powershell
+python -m src.models.hybrid_train --device cpu fit
+python -m src.models.hybrid_train --device cpu benchmark
+python -m src.models.hybrid_train simulate-drift
+python -m src.models.hybrid_train summarize
+```
+
 CLI outputs are write-once unless `--force` is supplied. JSON and feature outputs are written through temporary paths and atomically moved into place after successful serialization.
 
 ## Retention and Access Controls
@@ -151,6 +169,8 @@ CLI outputs are write-once unless `--force` is supplied. JSON and feature output
 - Joblib estimator artifacts are trusted-internal files and must never be loaded from an unverified source; use the report fingerprint before deserialization.
 - Native XGBoost JSON is the registered portable format for the boosted classifier.
 - Neural tensor artifacts are loaded through PyTorch's restricted `weights_only=True` path and must still match their report fingerprints.
+- The hybrid configuration contains no executable payload. Its report binds every component report, estimator fingerprint, model-data manifest, feature schema, and sequence-index manifest.
+- The hybrid probability cache is row-level model output and remains restricted. Drift references expose aggregate feature distributions and sampled scores and remain internal monitoring data.
 - The sequence pointer array contains row relationships but no labels or raw account identifiers; it remains internal because it exposes transaction linkage and partition topology.
 - The split and imbalance manifests contain file-system paths, fingerprints, time bounds, and label aggregates. They do not contain row-level transactions but remain internal operational metadata.
 - Delete or replace generated artifacts only after confirming that dependent matrices, reports, or model artifacts are no longer in use. Recompute downstream consumers whenever an upstream fingerprint or schema digest changes.
